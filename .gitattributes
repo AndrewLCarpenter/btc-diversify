@@ -1,1 +1,3 @@
 paper/* linguist-vendored
+*.pdf linguist-vendored
+*.Rmd linguist-vendored
