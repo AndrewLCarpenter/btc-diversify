@@ -1,0 +1,76 @@
+library(quantmod)
+library(PerformanceAnalytics)
+library(fBasics)
+library(ggplot2)
+library(reshape2)
+library(shiny)
+library(tseries)
+library(quadprog)
+#Data in
+sec.list <- c('SPY','VTSMX','BND','XLE','XLV','XLI','XLU','XLP','IYZ','XLK','XLY','XLF','XLB','GLD','SLV','EFA','EEM')
+getSymbols(Symbols = sec.list,
+                       src = 'yahoo',
+                       from = '2013-01-01', to=Sys.Date())
+getSymbols(Symbols = 'BTC/USD',
+                     src = 'oanda',
+                     from = '2013-01-01', to=Sys.Date())
+invisible(dev.off())
+#Remove the weekends from BTCUSD data...NO
+colnames(BTCUSD)[1] <- 'BTC.Adjusted'
+BTC <- BTCUSD[index(BTCUSD) %in% index(BND),]
+
+#build the portfolio
+stocks <- BTC[,1]
+for (sym in sec.list){
+  stocks <- cbind(stocks,Ad(get(sym)))
+}
+
+
+startDate = '2013-01-01'
+endDate = '2015-01-29'
+
+rets <- ROC(stocks[paste(startDate,'/',endDate, sep='')])
+rets <- rets[complete.cases(rets),]
+for (i in 1:length(colnames(rets))){
+  name <- colnames(rets)[i]
+  colnames(rets)[i] <- strsplit(name,'.',fixed = TRUE)[[1]][1]
+}
+
+prep_data <- list(rets = rets,
+                 mean = colMeans(rets),
+                 stdev = apply(rets, 2, sd),
+                 covar = cov(rets))
+
+efront <- function(prep_data, nport = 50, shorts = FALSE) {
+  ef <- matrix(0, nport, 2 + ncol(prep_data$rets))
+  pm <- seq((min(prep_data$mean) + .1^10), (max(prep_data$mean) - .1^10), 
+            length.out = nport)
+  
+  for (i in 1:nport) {
+    port <- NULL
+    try (port <- portfolio.optim(prep_data$rets, pm = pm[i], shorts = shorts))
+    
+    if (!is.null(port)) {
+      ef[i, 1] <- port$ps
+      ef[i, 2] <- port$pm
+      ef[i, 3:ncol(ef)] <- port$pw
+    }
+  }
+  list(ef = ef[, 1:2], wts = ef[, -1:-2])
+}
+
+ef1 <- efront(prep_data) ## long only
+ef2 <- efront(prep_data, short = TRUE) ## long/short
+
+plot(ef1$ef, xlim = c(0, .1), ylim = c(-.003, .008), type = 'l', lty = 6, xlab = 'risk(sd)', 
+     ylab = 'return', main = 'Efficient Frontier', col = 'navyblue')
+lines(ef2$ef, lty = 3, col = 'navyblue')
+
+cols <- ifelse(prep_data$mean > 0, 'green','red')
+points(prep_data$stdev, prep_data$mean, pch = 4, cex = .7, col = cols)
+text(prep_data$stdev, prep_data$mean, append(c('BTC'),sec.list), col = cols, cex = .5, adj = -.4)
+text(.02, .0035, 'LONG/SHORT', col = 'navyblue', cex = .6)
+text(.06, .0035, 'LONG ONLY', col = 'navyblue', cex = .6)
+grid()
+
+

@@ -1,0 +1,527 @@
+---
+title: "Bitcoin as a Portfolio Diversification Tool"
+author: "Andrew Carpenter"
+date: "April 16, 2016"
+header-includes:
+   - \setlength\parindent{24pt}
+output:
+  rmarkdown::pdf_document:
+    fig_caption: yes   
+abstract: Bitcoin is a decentralized digital currency that was created in 2008. Although it was originally designed as a medium of exchange, bitcoin has been embraced by many investors as a digital commodity and speculative vehicle. In this paper, we explore bitcoin's potential as a part of a well-diversifed portfolio from two perspectives. First, a traditional mean-variance framework, then a more robust mean-CVaR framework. Our findings show that a relatively small amount of bitcoin can drastically change risk/return structure of an optimal portfolio. Furthermore, we find that the increased risk bitcoin adds to a portfolio is often overcompensated with high returns that yield higher risk/return ratios. 
+bibliography: bib.bib
+---
+\newcommand{\vect}[1]{\boldsymbol{#1}}
+\newcommand\addtag{\refstepcounter{equation}\tag{\theequation}}
+```{r DataDependencies, echo=FALSE, message=FALSE, warning=FALSE}
+library(PerformanceAnalytics)
+library(quadprog)
+library(quantmod)
+library(xtable)
+
+
+# Plotting function
+performanceChart <- function (R, Rf = 0, main = NULL, geometric = TRUE, methods = "none", 
+          width = 0, event.labels = NULL, ylog = FALSE, wealth.index = FALSE, 
+          gap = 12, begin = c("first", "axis"), legend.loc = "topleft", 
+          p = 0.95, ...) 
+{
+  begin = begin[1]
+  x = checkData(R)
+  colnames = colnames(x)
+  ncols = ncol(x)
+  length.column.one = length(x[, 1])
+  start.row = 1
+  start.index = 0
+  while (is.na(x[start.row, 1])) {
+    start.row = start.row + 1
+  }
+  x = x[start.row:length.column.one, ]
+  if (ncols > 1) 
+    legend.loc = legend.loc
+  else legend.loc = NULL
+  if (is.null(main)) 
+    main = paste(colnames[1], "Performance", sep = " ")
+  if (ylog) 
+    wealth.index = TRUE
+  op <- par(no.readonly = TRUE)
+  layout(matrix(c(1, 2)), heights = c(2.3, 1.7), widths = 1)
+  par(mar = c(1, 4, 4, 2))
+  chart.TimeSeries(btc, main = NULL, xaxis = FALSE, ylab = 'Value (USD)')
+  par(mar = c(5, 4, 0, 2))
+  freq = periodicity(x)
+  switch(freq$scale, seconds = {
+    date.label = "Second"
+  }, minute = {
+    date.label = "Minute"
+  }, hourly = {
+    date.label = "Hourly"
+  }, daily = {
+    date.label = "Daily"
+  }, weekly = {
+    date.label = "Weekly"
+  }, monthly = {
+    date.label = "Monthly"
+  }, quarterly = {
+    date.label = "Quarterly"
+  }, yearly = {
+    date.label = "Annual"
+  })
+  chart.BarVaR(x, main = "", xaxis = TRUE, width = width, 
+               ylab = paste(date.label, "Return"), methods = methods, 
+               event.labels = NULL, ylog = FALSE, gap = gap, p = p, major.format = '%y-%m')
+  par(op)
+}
+
+
+
+
+securities <- c('SPY',       # S&P 500
+                'IWM',       # Russell 2000 (small cap)
+                'EFA',       # Foreign developed market equities
+                'VNQ',       # Real Estate
+                'GSG',       # Commodities
+                'BND')       # Vangaurd Bond Index
+
+importData <- function(sec = securities, returns = TRUE){
+  # Import Bitcoin price data
+  btc <- read.csv('~/googleDrive/Research/BTC_diversification/Data/coindesk-bpi-USD-close_data-2010-07-17_2016-04-16.csv')
+  btc <- btc[-c(nrow(btc),nrow(btc)-1),]
+  btc <- as.xts(btc[,2],order.by = as.POSIXct(btc[,1],tz = 'GMT'))['2011-01-03::']
+  colnames(btc) = c('BTC')
+  
+  getSymbols(Symbols = securities,
+             src = 'yahoo',
+             from = '2011-01-03', to = '2016-04-16')
+  df <- btc
+  for (sym in securities){
+    df <- cbind(df,Ad(get(sym)))
+  }
+  colnames(df)[2:length(colnames(df))] <- securities
+  
+  if(returns==TRUE){
+    df <- na.omit(ROC(na.omit(df)))
+  }
+  df
+}
+rets <- importData()
+btc <- read.csv('~/googleDrive/Research/BTC_diversification/Data/coindesk-bpi-USD-close_data-2010-07-17_2016-04-16.csv')
+btc <- btc[-c(nrow(btc),nrow(btc)-1),]
+btc <- as.xts(btc[,2],order.by = as.POSIXct(btc[,1],tz = 'UTC'))['2011-01-03::']
+colnames(btc) = c('BTC/USD')
+
+efront <- function(returns, nport = 100, max_concentration = .20, BTC_percentage = 0){
+  # If bitcoin percentage is specified:
+  if(BTC_percentage > 0){
+    returns <- returns[,-1]
+    Dmat <- cov(returns)
+    n <- nrow(Dmat)
+    if (1/n > max_concentration)
+      stop("Maximum asset concentration is too small.",call. = FALSE)
+    
+    # Constraints
+    Amat <- cbind(1,  
+                  diag(nrow(Dmat)),
+                  -1*diag(nrow(Dmat))) 
+    bvec <- c(1-BTC_percentage, 
+              rep(0, nrow(Dmat)), 
+              rep(-1*max_concentration, nrow(Dmat)))
+    meq <- 1
+  }
+  
+  else{
+    Dmat <- cov(returns)
+    n <- nrow(Dmat)
+    if (1/n > max_concentration)
+      stop("Maximum asset concentration is too small.",call. = FALSE)
+    
+    # Constraints: sum(w_i) = 1 & w_i >= 0 & w_i <= max_concentration
+    Amat <- cbind(1, 
+                  diag(nrow(Dmat)), 
+                  -1*diag(nrow(Dmat)))
+    bvec <- c(1, 
+              rep(0, nrow(Dmat)), 
+              rep(-1*max_concentration, nrow(Dmat)))
+    meq <- 1
+  }
+  
+  # Initialize matrix for allocation and statistics
+  eff <- matrix(nrow=nport, ncol=n+3)
+  colnames(eff) <- c(colnames(returns), "Std.Dev", "Exp.Return", "Sharpe")
+  port <- 1 #(counter variable)
+  
+  # Fill matrix
+  for (i in seq(from = -1,to = 1,length.out = nport)){
+    dvec <- colMeans(returns)*i
+    qp <- solve.QP(Dmat, dvec, Amat, bvec, meq)
+    qp$solution[abs(qp$solution) <= 1e-7] <- 0
+    
+    # load results into data frame
+    eff[port,1:n] <- qp$solution
+    eff[port,"Std.Dev"] <- sqrt(qp$solution %*% Dmat %*% qp$solution * 252)   # weights^T * covarMatrix * weights
+    eff[port,"Exp.Return"] <- as.numeric(colMeans(returns) %*% qp$solution * 252)            # returns * weights
+    eff[port,"Sharpe"] <- eff[port,"Exp.Return"] / eff[port,"Std.Dev"]
+    
+    qp$solution %*% Dmat 
+    port <- port+1
+  }
+  as.data.frame(eff)
+}
+
+rep.row<-function(x,n){
+  matrix(rep(x,each=n),nrow=n)
+}
+
+backtest <- function(rets, type = "equal", max_weight = .3, BTC_weight = .05, plot=FALSE){
+  # If equal then do it
+  if(type == "equal"){
+    n <- ncol(rets)
+    
+    #Create weight matrix
+    weights <- xts(rep.row(rep(1/n, ncol(rets)),nrow(rets)), order.by = index(rets))
+    
+    #Performance
+    bt <- Return.portfolio(rets, weights <- weights, rebalance_on = 'monthly')
+    if(plot==TRUE){
+      out <- xts(exp(cumsum(bt)),order.by = index(bt))
+      return(out)
+      }
+    }
+  
+  if(type == "markowitz"){
+    # Find optimal portfolio using mean-variance
+    optimal.portfolios <- efront(rets, max_concentration = max_weight)
+    maxSharpe <- optimal.portfolios[optimal.portfolios$Sharpe == max(optimal.portfolios$Sharpe),]
+    if(nrow(maxSharpe) > 1){maxSharpe <- maxSharpe[1,]}
+    
+    # Create weight matrix
+    weights <- xts(rep.row(as.numeric(maxSharpe[,1:ncol(rets)]),nrow(rets)), order.by = index(rets))
+    
+    # Now we have portfoio weights, so evolve it forward in time
+    bt <- Return.portfolio(rets, weights = weights, rebalance_on = 'monthly')
+    if(plot==TRUE){
+      out <- xts(exp(cumsum(bt)),order.by = index(bt))
+      return(out)
+    }
+  }
+  
+  if(type == 'BTC'){
+    optimal.portfolios <- efront(rets, max_concentration = max_weight,BTC_percentage = BTC_weight)
+    maxSharpe <- optimal.portfolios[optimal.portfolios$Sharpe == max(optimal.portfolios$Sharpe),]
+    if(nrow(maxSharpe) > 1){maxSharpe <- maxSharpe[1,]}
+    last <- ncol(optimal.portfolios)-3
+    maxSharpe <- cbind(.05, maxSharpe[,1:last])
+    
+    # Create weight matrix
+    weights <- xts(rep.row(as.numeric(maxSharpe[,1:ncol(rets)]),nrow(rets)), order.by = index(rets))
+    
+    # Now we have portfoio weights, so evolve it forward in time
+    bt <- Return.portfolio(rets, weights = weights, rebalance_on = 'monthly')
+    if(plot==TRUE){
+      out <- xts(exp(cumsum(bt)),order.by = index(bt))
+      return(out)
+    }
+    }
+  return(bt)
+}
+
+plotFront <- function(rets, max_weight, BTC_weight, xlim = c(0,.3), ylim = c(-.3,.3), main = 'Efficient Frontier'){
+  q <- efront(rets,nport = 10000, max_concentration = max_weight, BTC_percentage = BTC_weight)
+  q2 <- efront(rets[,-1],nport = 10000, max_concentration = max_weight, BTC_percentage = BTC_weight)
+  plot(q[c('Std.Dev','Exp.Return')], xlim = xlim, ylim = ylim, type = 'l', lty = 7, 
+       xlab = 'Standard Deviation', ylab = 'Expected Return', main = main, col = 'navyblue', lwd=2)
+  lines(q2[c('Std.Dev','Exp.Return')], type = 'l', lty = 7, col = 'red', lwd=2)
+  grid(lwd = 1.5)
+  points(sd.annualized(rets, scale = 252), colMeans(rets*252))
+  text(sd.annualized(rets, scale = 252), colMeans(rets*252), c('Bitcoin',securities), cex = .7, adj = -.3)
+  lines(seq(0,1,length.out = nrow(q)),max(q['Sharpe'])*seq(0,1,length.out = nrow(q)), type = 'l', lty=2)
+  lines(seq(0,1,length.out = nrow(q2)),max(q2['Sharpe'])*seq(0,1,length.out = nrow(q2)), type = 'l', lty=2)
+}
+
+sp <- rets[,2]
+long1 <- backtest(rets, type = 'markowitz', max_weight = 1)
+long2 <- backtest(rets[,-1], type = 'markowitz', max_weight = 1)
+q <- table.AnnualizedReturns(merge(sp,long2,long1))
+
+
+long_noHeavy1 <- backtest(rets, type = 'markowitz', max_weight = .3)
+long_noHeavy2 <- backtest(rets[,-1], type = 'markowitz', max_weight = .3)
+r <- table.AnnualizedReturns(merge(sp,long_noHeavy2,long_noHeavy1))
+
+
+eqWeighted1 <- backtest(rets, type = 'equal')
+eqWeighted2 <- backtest(rets[,-1], type = 'equal')
+s <- table.AnnualizedReturns(merge(sp,eqWeighted2,eqWeighted1))
+
+btcFive1 <- backtest(rets, type = 'BTC', max_weight = .3, BTC_weight = .05)
+btcFive2 <- backtest(rets[,-1], type = 'BTC', max_weight = .3, BTC_weight = .05)
+t <- table.AnnualizedReturns(merge(sp,btcFive2, btcFive1))
+
+tables <- function(index){
+  annRets <- cbind(c(0,0,0),t(q[index,]),t(r[index,]),t(s[index,]),t(t[index,]))
+  annRets[,1] <- c('S&P 500', 'Market Portfolio', 'Market Portfolio with Bitcoin')
+  rownames(annRets) <- NULL
+  annRets
+  }
+```
+
+\newpage
+
+\section{Introduction} 
+Bitcoin is a decentralized digital currency that was created by a pseudonymous programmer named Satoshi Nakamoto. Its peer-to-peer nature eliminates the need for a trusted third party, allowing for instantaneous payments to be sent anywhere in the world at essentially zero cost. Bitcoins are created through a process called mining. In order to "mint" new coins, bitcoin miners compete to solve complex mathematical problems. The first miner to solve the problem is awarded one "block" of newly minted coins. A new block is mined every 10 minutes, and only 21 million bitcoins will ever be created. [@satoshinakamoto2008]
+
+Since its inception in 2009, bitcoin adoption has grown at an astounding rate. According to blockchain.info, the number of active unique bitcoin addresses has doubled in the last year alone. As of April 2016, one bitcoin is worth approximately \$400 and the total market capitalization of the bitcoin network is over \$6 billion. Thousands of smaller merchants and several large companies, including Microsoft, Overstock.com and Dell, accept bitcoins as payment for their products or services. In spite of this growth, bitcoin has experienced several speculative bubbles and the average daily volatility of the bitcoin price is X times higher than Y. There are also ongoing concerns about the ability of the bitcoin network to handle large transaction volumes. Because of these issues, bitcoin cannot effectively operate as a currency. High volatility impedes its ability to act as a store of value, while the network scalability issues hinder its utility as a medium of exchange. 
+
+Bitcoin is a disruptive technology, which has garnered considerable attention from academics in the fields of computer science and law. In spite of this, financial literature pertaining to bitcoin is scarce. Although it is not currently a viable currency, there is evidence that bitcoin has merit as a digital asset. Briere et al. (2013) use a traditional mean-variance framework to show bitcoin\textquotesingle s potential as a part of a well-diversified portfolio. More recently, [@stephan2014] applies a Conditional Value-at-Risk framework and portfolio backtesting techniques to yield similar results.
+
+In this paper, we examine the historical behavoir of bitcoin, then pair mean-variance and Conditional Value-at-Risk frameworks with backtesting techniques, in order to identify the implications of adding bitcoin to a well diversified portfolio. 
+
+
+```{r figure1, fig.height=5, fig.width = 8, echo=FALSE, message = FALSE, warning= FALSE, fig.cap='Bitcoin price in USD (top) and daily log returns (bottom).'}
+performanceChart(rets)
+```
+
+\newpage
+
+\section{Data}
+
+The first major bitcoin exchange, Mt. Gox, was established in July 2010[^1]. Since there is no consistent bitcoin price data prior to 2011, our data sample spans from 2011-2016 for a total of 5 years. In order to represent the well-diversified portfolio of a U.S. investor, we use various index funds as proxies for US equities, developed foreign equities, real estate, commodities, and US bonds. For US equities, the SPDR S&P 500 ETF and iShares Russell 2000 ETF are used for large cap and small cap, respectively. Developed foreign equities are represented by the iShares EAFE ETF, real estate is represented by the Vanguard REIT ETF, commodities are represented by the iShares S&P GSCI Commodity-Indexed ETF, and U.S. investment grade bonds are represented by the Vanguard Bond Market ETF. All historical US ETF data is from the US Stock Database at the Center for Research in Security Prices (CRSP), The University of Chicago Booth School of Business. Historical daily bitcoin prices are taken from the CoinDesk Bitcoin Price Index, which is calculated as the midpoint of the bid/ask spread, and averaged across leading exchanges[^2].
+
+
+
+```{r assetTable, results='asis', echo = FALSE, message = FALSE}
+
+dataTab <- data.frame(c('Bitcoin', 'Large Cap U.S. Equity',
+                                    'Small Cap U.S. Equity',
+                                    'Developed Foreign Markets',
+                                    'Real Estate',
+                                    'Commodities',
+                                    'Bonds'),
+                      c('Coindesk BPI', 'SPDR S&P 500 ETF',
+                                      'iShares Russell 2000 ETF',
+                                      'iShares MSCI EAFE ETF',
+                                      'Vanguard REIT ETF',
+                                      'iShares S&P GSCI Commodity-Indexed ETF',
+                                      'Vanguard Total Bond Market ETF'),
+                      c('BTC', 'SPY','IWM','EFA','VNQ','GSG','BND'))
+colnames(dataTab) <- c('Asset Class', 'Representative Index', 'Ticker')
+print(xtable(dataTab, caption = 'Each asset class, the accompanying index, and ticker. These will be used to form the representative "well-diversified" portfolio of a US investor.'), include.rownames = FALSE, comment = FALSE)
+```
+
+A performance comparison of the assets in our representative portfolio is presented in Table 2. Realized returns are calculated as a compound annual growth rate (CAGR), and risk is measured in both annualized standard deviation and annualized Sharpe Ratio[^3]. From both nominal and traditional risk-adjusted standpoints, bitcoin outperforms all other assets in our representative portfolio. We also consider other risk metrics, namely Value-at-Risk (VaR) and Conditional Value-at-Risk (CVaR or ES)[^4]. Boudt, Peterson and Croux (2008) provide a "modified" VaR calculation that utilizes a Cornish-Fisher expansion to account for the skewness and kurtosis of non-normal distributions.[-@boudt013] The 95% modified VaR and CVaR measurements are also included in Table 2.
+
+```{r performance, results='asis', echo=FALSE, message = FALSE}
+perform <- table.AnnualizedReturns(rets,geometric = T)
+daily <- table.Arbitrary(rets)
+downside <- round(table.DownsideRisk(rets)[c(10,11),],3)
+out <- rbind(round(daily,3), perform, downside)
+rownames(out)[1] <- c('Average Daily Return')
+print(xtable(out,
+             align = c('l','r','r','r','r','r','r','r'), 
+             caption='Various performance and risk metrics presented on a daily and annual basis. Annualized Return is calculated as compound annual growth rate (CAGR). Modified VaR and Modified ES are calculated using a Cornish-Fisher expansion presented in Boudt, Peterson and Croux (2008)',
+             digits=c(0,3,3,3,3,3,3,3)), comment = FALSE)
+```
+
+
+[^1]: Mt. Gox handled close to 70% of all bitcoin transactions by 2013. In early 2014, Mt. Gox suspended trading, announced that over $400 million in bitcoin were missing, and filed for bankruptcy. [@nathanielpopper2014]
+
+[^2]: The exchanges that meet the criteria to be included in the CoinDesk BPI are: Bitstamp, Bitfinex, Coinbase, itBit, and OKCoin. (See http://www.coindesk.com/price/bitcoin-price-index). 
+
+[^3]: $SharpeRatio = \frac{\mu_h-R_f}{\sigma_h}$ where $\mu_h$ is the mean historical return, $R_f$ is the risk free rate and $\sigma_h$ is the historical standard deviation. 
+
+[^4]: Rockafellar and Uryasev, \textit{“Optimization of Conditional Value-at-Risk”}, Journal of Risk, 2000
+
+Bitcoin also performs favorably from a correlation stand point. Table 3 presents the correlation matrix for the assets in our representative portfolio. In order to examine the historical structure of the correlations, Figure 2 shows the same correlations calculated using a rolling 6 month window. 
+
+```{r Correlations, results='asis', echo = FALSE, message = FALSE}
+corr <- round(cor(rets, method = 'pearson'),4)
+corr[upper.tri(corr)] <- ' '
+print(xtable(corr, caption = 'Pearson correlation matrix of return series.'), comment = FALSE)
+```
+
+```{r figure2, fig.height=5, fig.width = 8, echo=FALSE, message = FALSE, warning= FALSE, fig.cap='Rolling correlations between bitcoin and the other assets in our representative portfolio. Calculated using a rolling 6 month window.'}
+chart.RollingCorrelation(rets[,1], rets[,2:ncol(rets)], 
+                         width = 180,
+                         colorset = rich10equal, 
+                         legend.loc = 'bottomleft', 
+                         main = '6 Month Rolling Correlations')
+```
+
+
+\section{Methodology}  
+  Since bitcoin performs well on a risk adjusted basis, and is not highly correlated with any other traditional asset, we hypothesize that bitcoin can increase the performance of any efficient portfolio. In order to evaluate the viablility of bitcoin as a part of an efficient portfolio, we will explore two methods. Our first method uses a traditional mean-variance framework, following Markowitz [-@harrymark52], and our second utilizes a mean-CVaR framework which follows Rockafellar and Uryasev [-@uryasev2000].
+  
+\subsection{Approach 1: Mean-Variance Optimization}
+  Let $\vect{w}$ represent a vector of security weights, $\vect{\Sigma}$ the covariance matrix of the security returns, and $\vect{R}$ a vector of expected returns. In order to form an efficient frontier of portfolios with optimal risk-return profiles, for a given "risk tolerance" $q$, we minimize[^5] $$\vect{w}^T\vect{\Sigma w} - q \cdot \vect{R}^T \vect{w} \addtag$$ 
+
+subject to constraints:
+
+$$\sum_{i = 1}^{N} w_i= 1$$
+$$0 \leq w_i \leq p$$
+
+where $p$ is some maximum weight that any given asset can take. 
+
+\subsection{Approach 2: Mean-CVaR Optimization}
+
+Let $\vect{x} = [x_1, \dots, x_n]$ where $x_i$ represents the weight in asset $i$, and $\vect{y} = [y_1, \dots, y_n]$ where $y_i$ represents the return to asset $i$. The distribution of $\vect{y}$ is joint distribution of all of the asset returns, and is given by $p(\vect{y})$.
+
+Define the loss[^6] associated with a given portfolio $\vect{x}$
+
+$$f(\vect{x,y}) = -\vect{x}^T\vect{y} \addtag $$
+
+The probability of a loss, $f(\vect{x,y})$, not exceeding a threshold, $\alpha$, is given by
+
+$$\Psi(\vect{x},\alpha) = \int\limits_{f(\vect{x,y}) \leq \alpha} p(\vect{y})d\vect{y} \addtag $$
+
+For a given portfolio, $\vect{x}$, and confidence level, $\beta$, the Value-at-Risk ($\alpha_\beta$) is defined
+
+$$\alpha_\beta(\vect{x}) = \min{\alpha \in \mathbb{R} : \Psi(\vect{x},\alpha) \geq \beta} \addtag $$
+
+and the Conditional Value-at-Risk ($\phi$) is defined as the loss, given that the loss is greater than $\alpha_\beta(\vect{x})$
+
+$$CVaR_\beta(\vect{x}) = \frac{1}{(1-\beta)} \int\limits_{f(\vect{x,y}) \leq \alpha_\beta(\vect{x})} f(\vect{x,y}) p(\vect{y})d\vect{y} \addtag $$
+
+Let $\vect{R}$ be an imposed minimum return amount for a given portfolio, and $\vect{\mu}$ a vector of expected (mean) asset returns. Now we can form optimal portfolios by minimizing equation (4), subject to:
+$$-\vect{x}^T\vect{\mu} \leq -R$$
+$$\sum_{i = 1}^{N} x_i= 1$$
+$$x_i \geq 0$$
+
+
+\subsection{Portfolio Compositions}
+We will consider several different portfolio compositions--each with a different set of requirements. All three portfolios assume long-only positions.
+
+\begin{enumerate}
+   \item \textbf{Long} 
+      $$0 \leq w_i \leq 1$$
+   \item \textbf{No heavy concentration}
+      $$0 \leq w_i \leq 0.3$$
+   \item \textbf{Equal Weighted}[@demiguel2009]
+      $$w_i = \frac{1}{N}$$
+   \item \textbf{5\% in bitcoin and no heavy concentration}  
+      $$0 \leq w_i \leq 0.3$$
+      $$w_{\text{BTC}} = 5\%$$
+\end{enumerate}
+
+[^5]: Minimization via "dual method" of Goldfarb and Idnani [@goldfarb]
+[^6]: We are measuring losses, so a negative loss is logically equivalent to a return.
+
+
+
+
+
+\section{Results}
+\subsection{Mean-Variance}
+  Tables 3-6 show descriptive risk and return statistics for each of our 4 portfolios. In every case, the addition of (any amount of) bitcoin more than doubles the expected return of a well diversified portfolio, while adding a fraction of the risk. This tradeoff can be seen in the Sharpe Ratios presented in Table 5, and the efficient frontiers plotted in Figure 3. Figure 4 shows a cumulative return comparison of each portfolio with its bitcoin counterpart. 
+  The risk return tradeoff exhibited by these portfolios is impressive, but it is important to note that the standard CAPM and mean-variance portfolio optimization depend heavily on the assumption that asset returns are normally distributed. Because bitcoin exhibits extreme excess kurtosis, the standard Markowitz mean-variance model cannot capture the true risk/return profile of our portfolios. 
+```{r annRets, results='asis', echo = FALSE, message = FALSE}
+annRets <-tables(1)
+colnames(annRets) <- c('Return','Long','Long No Concentration','Equal Weighted','5% BTC')
+rownames(annRets) <- NULL
+print(xtable(annRets, caption = "Annualized returns to the Market Portfolio (with and without bitcoin) for each portfolio composition.",
+             align = c('l','l','c','c','c','c')),include.rownames = FALSE, comment = FALSE)
+```
+
+```{r annSD, results='asis', echo = FALSE, message = FALSE}
+annRets <-tables(2)
+colnames(annRets) <- c('Standard Deviation','Long','Long No Concentration','Equal Weighted','5% BTC')
+rownames(annRets) <- NULL
+print(xtable(annRets,
+             caption = "Annualized standard deviation of the Market Portfolio (with and without bitcoin) for each portfolio composition.",
+             align = c('l','l','c','c','c','c')),include.rownames = FALSE, comment = FALSE)
+```
+
+```{r SharpeRats, results='asis', echo = FALSE, message = FALSE}
+annRets <-tables(3)
+colnames(annRets) <- c('Sharpe Ratio','Long','Long No Concentration','Equal Weighted','5% BTC')
+rownames(annRets) <- NULL
+print(xtable(annRets, caption = "Annualized Sharpe Ratio of the Market Portfolio (with and without bitcoin) for each portfolio composition.",
+             align = c('l','l','c','c','c','c')),include.rownames = FALSE, comment = FALSE)
+```
+
+```{r efrontLongOnly, fig.height=5, fig.width = 8, echo=FALSE, message = FALSE, warning= FALSE, fig.cap='The efficient frontier calculated using Markowitz mean-variance optimization. Adding bitcoin to an optimal portfolio can shift the capital allocation line, allowing investors to earn higher return per unit of risk taken.'}
+plotFront(rets, max_weight = 1, BTC_weight = 0)
+legend(x = 'bottomleft', legend = c('Optimal Port. Bitcoin','Optimal Port. no Bitcoin', 'Capital Allocation Line'),
+       lty = c("solid","solid","dashed"), col = c('blue','red', 'black'))
+```
+
+```{r cumPerform, fig.height=5, fig.width = 8, echo=FALSE, message = FALSE, warning= FALSE, fig.cap='Cumulative return of each portfolio with bitcoin (black) and without bitcoin (red).'}
+#ok
+par(mfrow=c(2,2))
+
+plot(exp(cumsum(long1)), main='Portfolio 1 (Long)')
+lines(exp(cumsum(long2)), col='red')
+
+plot(exp(cumsum(long_noHeavy1)), main='Portfolio 2 (Long/no Heavy Concentration)')
+lines(exp(cumsum(long_noHeavy2)), col='red')
+
+plot(exp(cumsum(eqWeighted1)), main='Portfolio 3 (Equal Weighted)')
+lines(exp(cumsum(eqWeighted2)),col = 'red')
+
+plot(exp(cumsum(btcFive1)), main = 'Portfolio 4 (5% BTC)')
+lines(exp(cumsum(long_noHeavy2)), col='red')
+
+```
+
+\newpage
+
+\subsection{Mean-CVaR}
+  The results of our mean-CVaR portfolio simulation are given in Figure 5. All portfolios are subject to the constraints given in the CVaR methodology and tend to perform worse than their mean-variance counterparts. Even so, they outperform their non-bitcoin counterparts and offer better risk/return ratios.
+  
+```{r meanCVAR_cumPerform, fig.height=5, fig.width = 8, echo=FALSE, message = FALSE, warning= FALSE, fig.cap='Cumulative return of each portfolio with bitcoin (black) and without bitcoin (red).'}
+
+setwd('~/googleDrive/Research/BTC_diversification/Data/')
+weights_LongBTC <- read.csv('weights_LongBTC.csv', sep = ' ')
+weights_LongBTC <- xts(weights_LongBTC[,3:ncol(weights_LongBTC)], order.by = index(to.monthly(rets['2011-09-30::'])))
+
+weights_Long <- read.csv('weights_Long.csv', sep = ' ')
+weights_Long <- xts(weights_Long[,3:ncol(weights_Long)], order.by = index(to.monthly(rets['2011-09-30::'])))
+
+weights_noConcBTC <- read.csv('weights_noConcBTC.csv', sep = ' ')
+weights_noConcBTC <- xts(weights_noConcBTC[,3:ncol(weights_noConcBTC)], order.by = index(to.monthly(rets['2011-09-30::'])))
+
+weights_noConc <- read.csv('weights_noConc.csv', sep = ' ')
+weights_noConc <- xts(weights_noConc[,3:ncol(weights_noConc)], order.by = index(to.monthly(rets['2011-09-30::'])))
+
+weights_5btc <- read.csv('weights_5btc.csv', sep = ' ')
+weights_5btc <- xts(weights_5btc[,3:ncol(weights_5btc)], order.by = index(to.monthly(rets['2011-09-30::'])))
+
+
+
+par(mfrow=c(2,2))
+
+plot(exp(cumsum(Return.portfolio(rets['2011-09-30::'], weights = weights_LongBTC))), main='Portfolio 1 (Long)')
+lines(exp(cumsum(Return.portfolio(rets[,-1]['2011-09-30::'], weights = weights_Long))), col = 'red')
+
+plot(exp(cumsum(Return.portfolio(rets['2011-09-30::'], weights = weights_noConcBTC))),main='Portfolio 2 (Long/no Heavy Concentration)')
+lines(exp(cumsum(Return.portfolio(rets[,-1]['2011-09-30::'], weights = weights_noConc))), col='red')
+
+plot(exp(cumsum(eqWeighted1)), main='Portfolio 3 (Equal Weighted)')
+lines(exp(cumsum(eqWeighted2)),col = 'red')
+
+plot(exp(cumsum(Return.portfolio(rets['2011-09-30::'], weights = merge(xts(rep(.05,nrow(weights_5btc)), order.by=index(weights_5btc)),weights_5btc)))), main = 'Portfolio 4 (5% BTC)')
+lines(exp(cumsum(Return.portfolio(rets[,-1]['2011-09-30::'], weights = weights_noConc))), col='red')
+
+
+
+
+```
+  
+  
+\section{Conclusion}
+  Bitcoin is still a very young system, and it's future is all but clear. It is likely that bitcoin will continue to experience growing pains for many years to come, but based on the results of our standard mean variance framework, and our more robust mean-CVaR framework, we conclude that bitcoin can play a significant role in a well diversified portfolio.
+\newpage
+\section{References}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

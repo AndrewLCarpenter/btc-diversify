@@ -1,0 +1,41 @@
+---
+title: "example"
+author: "you"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output:
+  rmarkdown::pdf_document:
+    fig_caption: yes
+
+bibliography: finalBib.bib
+---
+\newcommand{\vect}[1]{\boldsymbol{#1}}
+\newcommand\addtag{\refstepcounter{equation}\tag{\theequation}}
+
+
+```{r returnHist}
+securities <- c('SPY',       # S&P 500
+                'IWM',       # Russell 2000 (small cap)
+                'EFA',       # Foreign developed market equities
+                'VNQ',       # Real Estate
+                'GSG',       # Commodities
+                'BND',       # Vangaurd Bond Index
+                'HYG')       # High Yield Bond
+
+getData <- function(startDate='2012-01-01', path='~/googleDrive/Research/BTC_diversification/Data/newData.csv'){
+  rets <- read.csv(path)
+  rets <- xts(rets[,-1], order.by = as.POSIXct(rets[,1]))[paste(startDate,'/2016-05-20',sep='')]
+  rets
+}
+rets <- getData()
+
+hist(rets[,1],xlim=c(-.2,.2),ylim=c(0,50),breaks= 500,col=  rgb(0,1,0,1),main="Return Histograms for BTC and SPY",xlab="Return")
+par(new=TRUE)
+hist(rets[,2],xlim=c(-.2,.2),ylim=c(0,50),breaks=500,col='black',main="",xlab="",ylab="")
+legend(x = 'topleft', legend = c('BTC','SPY'),
+       lty = c("solid","solid"), col = c('green', 'black'), lwd=5)
+
+
+```
+
+
+\bstctlcite{IEEEexample:BSTcontrol}
